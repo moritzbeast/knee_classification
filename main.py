@@ -4,10 +4,11 @@ import os
 from dataset import knee_xray_dataset, compute_mean_std
 from torch.utils.data import DataLoader
 from model import MyModel
-from trainer import train_model
+from trainer import train_model, plot_confusion_matrix
 from utils import set_seed, make_run_dir
 from torchvision.transforms import v2
 import torch
+import numpy as np
 
 # 1. We need the arguments
 args = get_args()
@@ -24,6 +25,10 @@ train_transform = v2.Compose([
     v2.RandomAffine(degrees=10, translate=(0.05, 0.05), scale=(0.9, 1.1)),
     v2.ColorJitter(brightness=0.2, contrast=0.2),
 ])
+
+# val predictions of all folds: every train image is in exactly one val fold,
+# predicted by a model that never saw it -> one confusion matrix over all 1881 images
+all_val_labels, all_val_preds = [], []
 
 # 2. Iterate over each fold
 for fold in range(5):
@@ -47,4 +52,10 @@ for fold in range(5):
     model = MyModel(backbone=args.backbone)
 
     # 6. Train the model
-    train_model(model, train_loader, val_loader, fold, run_dir)
+    labels, preds = train_model(model, train_loader, val_loader, fold, run_dir)
+    all_val_labels.append(labels)
+    all_val_preds.append(preds)
+
+# 7. Confusion matrix over all folds
+plot_confusion_matrix(np.concatenate(all_val_labels), np.concatenate(all_val_preds), "All folds - validation, best epochs",
+                      os.path.join(run_dir, "confusion_matrix_all_folds.png"))

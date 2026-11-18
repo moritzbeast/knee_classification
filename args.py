@@ -16,9 +16,9 @@ def get_args():
                         choices=[16, 32, 64, 128])
 
     parser.add_argument("-lr", type=float, default=1e-4,
-                        choices=[1e-4, 1e-3])
+                        choices=[1e-4, 2e-4, 3e-4, 1e-3])
 
-    parser.add_argument("-wd", type=float, default=1e-6)
+    parser.add_argument("-wd", type=float, default=1e-2)
 
     parser.add_argument("-seed", type=int, default=42)
 
