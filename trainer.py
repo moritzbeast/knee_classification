@@ -19,7 +19,7 @@ METRICS = ["loss", "acc", "bal_acc", "f1"]
 
 def compute_metrics(labels, preds):
     # sklearn warns if a class is never predicted (e.g. KL4 early in training);
-    # this would flood the live output, the values are not affected
+    # this would break the progress bar, the values are not affected
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         acc = accuracy_score(labels, preds)
@@ -39,10 +39,12 @@ def train_model(model, train_loader, val_loader, fold, run_dir):
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.wd)
 
     best_bal_acc = -1
+    best_epoch = 0
 
     history = {f"{split}_{key}": [] for split in ["train", "val"] for key in METRICS}
 
-    pbar = tqdm(range(args.epochs), desc=f"Fold {fold}")
+    # fixed width: if the line is wider than the terminal, it wraps and every update leaves an old bar behind
+    pbar = tqdm(range(args.epochs), desc=f"Fold {fold}", ncols=130)
     for epoch in pbar:
         model.train()
         running_loss = 0
@@ -50,8 +52,7 @@ def train_model(model, train_loader, val_loader, fold, run_dir):
         all_labels = []
         all_preds = []
 
-        batch_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.epochs}", leave=False)
-        for i, batch in enumerate(batch_bar):
+        for batch in train_loader:
             inputs = batch["xray"].to(device)
             labels = batch["target"].to(device)
 
@@ -66,13 +67,8 @@ def train_model(model, train_loader, val_loader, fold, run_dir):
             all_labels.append(labels.cpu().numpy())
             all_preds.append(outputs.argmax(dim=1).cpu().numpy())
 
-            # live values over all batches of this epoch so far;
-            # after the last batch these are the train metrics of the epoch
-            train_loss = running_loss/(i + 1)
-            train_acc, train_bal_acc, train_f1 = compute_metrics(np.concatenate(all_labels), np.concatenate(all_preds))
-            # dict instead of keyword args, otherwise tqdm sorts the keys alphabetically
-            batch_bar.set_postfix({"loss": f"{train_loss:.4f}", "acc": f"{train_acc:.4f}",
-                                   "bal_acc": f"{train_bal_acc:.4f}", "f1": f"{train_f1:.4f}"})
+        train_loss = running_loss/len(train_loader)
+        train_acc, train_bal_acc, train_f1 = compute_metrics(np.concatenate(all_labels), np.concatenate(all_preds))
 
         val_loss, val_acc, val_bal_acc, val_f1 = validate_model(model, val_loader, criterion)
 
@@ -82,17 +78,20 @@ def train_model(model, train_loader, val_loader, fold, run_dir):
                            ("val_bal_acc", val_bal_acc), ("val_f1", val_f1)]:
             history[key].append(value)
 
-        tqdm.write(f"Epoch {epoch+1}/{args.epochs}")
-        tqdm.write(f"  Train | {format_metrics(train_loss, train_acc, train_bal_acc, train_f1)}")
-        tqdm.write(f"  Val   | {format_metrics(val_loss, val_acc, val_bal_acc, val_f1)}")
-
         if val_bal_acc > best_bal_acc:
             best_bal_acc = val_bal_acc
+            best_epoch = epoch + 1
             torch.save(model.state_dict(), os.path.join(run_dir, f"best_model_fold_{fold}.pth"))
-            tqdm.write(f"  New best model saved (Bal Acc: {best_bal_acc:.4f})")
 
-        pbar.set_postfix({"val_loss": f"{val_loss:.4f}", "val_bal_acc": f"{val_bal_acc:.4f}",
-                          "best": f"{best_bal_acc:.4f}"})
+        # dict instead of keyword args, otherwise tqdm sorts the keys alphabetically
+        pbar.set_postfix({"train_loss": f"{train_loss:.4f}", "val_loss": f"{val_loss:.4f}",
+                          "val_bal_acc": f"{val_bal_acc:.4f}", "best": f"{best_bal_acc:.4f}"})
+
+    # fold summary: metrics of the saved (best) epoch
+    b = best_epoch - 1
+    tqdm.write(f"Fold {fold} done | best epoch {best_epoch}/{args.epochs}")
+    tqdm.write(f"  Train | {format_metrics(*(history[f'train_{key}'][b] for key in METRICS))}")
+    tqdm.write(f"  Val   | {format_metrics(*(history[f'val_{key}'][b] for key in METRICS))}\n")
 
     plot_metrics(history, fold, run_dir)
 
