@@ -5,13 +5,17 @@ from dataset import knee_xray_dataset, compute_mean_std
 from torch.utils.data import DataLoader
 from model import MyModel
 from trainer import train_model
+from utils import set_seed, make_run_dir
 
 # 1. We need the arguments
 args = get_args()
+run_dir = make_run_dir(args)
+print(f"Saving results to {run_dir}")
 
 # 2. Iterate over each fold
 for fold in range(5):
     print(f"Fold {fold}")
+    set_seed(args.seed)
 
     train_set = pd.read_csv(os.path.join(args.csv_dir, f"train_fold_{fold}.csv"))
     val_set = pd.read_csv(os.path.join(args.csv_dir, f"val_fold_{fold}.csv"))
@@ -31,4 +35,4 @@ for fold in range(5):
     model = MyModel(backbone=args.backbone)
 
     # 6. Train the model
-    train_model(model, train_loader, val_loader, fold)
+    train_model(model, train_loader, val_loader, fold, run_dir)

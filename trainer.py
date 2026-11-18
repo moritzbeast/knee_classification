@@ -1,47 +1,57 @@
 import os
+import warnings
 from args import *
 import torch
 import torch.optim as optim
 import torch.nn as nn
-from sklearn.metrics import balanced_accuracy_score, roc_auc_score, average_precision_score
-from sklearn.preprocessing import label_binarize
+from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from tqdm import tqdm
 
 args = get_args()
 device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 
-def compute_metrics(labels, probs):
-    classes = list(range(probs.shape[1]))
-    preds = probs.argmax(axis=1)
+METRICS = ["loss", "acc", "bal_acc", "f1"]
 
-    bal_acc = balanced_accuracy_score(labels, preds)
-    roc_auc = roc_auc_score(labels, probs, multi_class="ovr", labels=classes)
-    avg_prec = average_precision_score(label_binarize(labels, classes=classes), probs, average="macro")
 
-    return bal_acc, roc_auc, avg_prec
+def compute_metrics(labels, preds):
+    # sklearn warns if a class is never predicted (e.g. KL4 early in training);
+    # this would flood the live output, the values are not affected
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        acc = accuracy_score(labels, preds)
+        bal_acc = balanced_accuracy_score(labels, preds)
+        f1 = f1_score(labels, preds, average="macro", zero_division=0)
 
-def train_model(model, train_loader, val_loader, fold):
+    return acc, bal_acc, f1
+
+
+def format_metrics(loss, acc, bal_acc, f1):
+    return f"Loss {loss:.4f} | Acc {acc:.4f} | Bal Acc {bal_acc:.4f} | F1 {f1:.4f}"
+
+
+def train_model(model, train_loader, val_loader, fold, run_dir):
     model.to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.wd)
 
-    os.makedirs(args.output_dir, exist_ok=True)
     best_bal_acc = -1
 
-    history = {key: [] for key in ["train_loss", "train_bal_acc", "train_roc_auc", "train_avg_prec",
-                                   "val_loss", "val_bal_acc", "val_roc_auc", "val_avg_prec"]}
+    history = {f"{split}_{key}": [] for split in ["train", "val"] for key in METRICS}
 
-    for epoch in range(args.epochs):
+    pbar = tqdm(range(args.epochs), desc=f"Fold {fold}")
+    for epoch in pbar:
         model.train()
         running_loss = 0
 
         all_labels = []
-        all_probs = []
+        all_preds = []
 
-        for batch in train_loader:
+        batch_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.epochs}", leave=False)
+        for i, batch in enumerate(batch_bar):
             inputs = batch["xray"].to(device)
             labels = batch["target"].to(device)
 
@@ -53,38 +63,46 @@ def train_model(model, train_loader, val_loader, fold):
 
             running_loss += loss.item()
 
-            probs = torch.softmax(outputs.detach(), dim=1)
             all_labels.append(labels.cpu().numpy())
-            all_probs.append(probs.cpu().numpy())
+            all_preds.append(outputs.argmax(dim=1).cpu().numpy())
 
-        train_loss = running_loss/len(train_loader)
-        train_bal_acc, train_roc_auc, train_avg_prec = compute_metrics(np.concatenate(all_labels), np.concatenate(all_probs))
+            # live values over all batches of this epoch so far;
+            # after the last batch these are the train metrics of the epoch
+            train_loss = running_loss/(i + 1)
+            train_acc, train_bal_acc, train_f1 = compute_metrics(np.concatenate(all_labels), np.concatenate(all_preds))
+            # dict instead of keyword args, otherwise tqdm sorts the keys alphabetically
+            batch_bar.set_postfix({"loss": f"{train_loss:.4f}", "acc": f"{train_acc:.4f}",
+                                   "bal_acc": f"{train_bal_acc:.4f}", "f1": f"{train_f1:.4f}"})
 
-        print(f"Epoch {epoch+1}/{args.epochs}")
-        print(f"Training Loss: {train_loss:.4f} | Balanced Acc: {train_bal_acc:.4f} | "
-              f"ROC-AUC: {train_roc_auc:.4f} | Avg Precision: {train_avg_prec:.4f}")
-        
-        val_loss, val_bal_acc, val_roc_auc, val_avg_prec = validate_model(model, val_loader, criterion)
+        val_loss, val_acc, val_bal_acc, val_f1 = validate_model(model, val_loader, criterion)
 
-        for key, value in [("train_loss", train_loss), ("train_bal_acc", train_bal_acc),
-                           ("train_roc_auc", train_roc_auc), ("train_avg_prec", train_avg_prec),
-                           ("val_loss", val_loss), ("val_bal_acc", val_bal_acc),
-                           ("val_roc_auc", val_roc_auc), ("val_avg_prec", val_avg_prec)]:
+        for key, value in [("train_loss", train_loss), ("train_acc", train_acc),
+                           ("train_bal_acc", train_bal_acc), ("train_f1", train_f1),
+                           ("val_loss", val_loss), ("val_acc", val_acc),
+                           ("val_bal_acc", val_bal_acc), ("val_f1", val_f1)]:
             history[key].append(value)
-        
+
+        tqdm.write(f"Epoch {epoch+1}/{args.epochs}")
+        tqdm.write(f"  Train | {format_metrics(train_loss, train_acc, train_bal_acc, train_f1)}")
+        tqdm.write(f"  Val   | {format_metrics(val_loss, val_acc, val_bal_acc, val_f1)}")
+
         if val_bal_acc > best_bal_acc:
             best_bal_acc = val_bal_acc
-            torch.save(model.state_dict(), os.path.join(args.output_dir, f"best_model_fold_{fold}.pth"))
-            print(f"New best model saved (Balanced Acc: {best_bal_acc:.4f})")
+            torch.save(model.state_dict(), os.path.join(run_dir, f"best_model_fold_{fold}.pth"))
+            tqdm.write(f"  New best model saved (Bal Acc: {best_bal_acc:.4f})")
 
-    plot_metrics(history, fold)
+        pbar.set_postfix({"val_loss": f"{val_loss:.4f}", "val_bal_acc": f"{val_bal_acc:.4f}",
+                          "best": f"{best_bal_acc:.4f}"})
+
+    plot_metrics(history, fold, run_dir)
+
 
 def validate_model(model, val_loader, criterion):
     model.eval()
 
     running_loss = 0
     all_labels = []
-    all_probs = []
+    all_preds = []
 
     with torch.no_grad():
         for batch in val_loader:
@@ -96,26 +114,20 @@ def validate_model(model, val_loader, criterion):
             loss = criterion(outputs, labels)
             running_loss += loss.item()
 
-            probs = torch.softmax(outputs, dim=1)
             all_labels.append(labels.cpu().numpy())
-            all_probs.append(probs.cpu().numpy())
-
-    all_labels = np.concatenate(all_labels)
-    all_probs = np.concatenate(all_probs)
+            all_preds.append(outputs.argmax(dim=1).cpu().numpy())
 
     validation_loss = running_loss/len(val_loader)
-    bal_acc, roc_auc, avg_prec = compute_metrics(all_labels, all_probs)
+    acc, bal_acc, f1 = compute_metrics(np.concatenate(all_labels), np.concatenate(all_preds))
 
-    print(f"Validation Loss: {validation_loss:.4f} | Balanced Acc: {bal_acc:.4f} | "
-          f"ROC-AUC: {roc_auc:.4f} | Avg Precision: {avg_prec:.4f}")
+    return validation_loss, acc, bal_acc, f1
 
-    return validation_loss, bal_acc, roc_auc, avg_prec
 
-def plot_metrics(history, fold):
+def plot_metrics(history, fold, run_dir):
     metrics = [("loss", "Loss"),
                ("bal_acc", "Balanced Accuracy"),
-               ("roc_auc", "ROC-AUC"),
-               ("avg_prec", "Average Precision")]
+               ("acc", "Accuracy"),
+               ("f1", "F1 Score (macro)")]
 
     epochs = range(1, len(history["train_loss"]) + 1)
     best_epoch = int(np.argmax(history["val_bal_acc"])) + 1
@@ -134,12 +146,5 @@ def plot_metrics(history, fold):
 
     fig.suptitle(f"Fold {fold}")
     fig.tight_layout()
-    fig.savefig(os.path.join(args.output_dir, f"metrics_fold_{fold}.png"), dpi=150)
+    fig.savefig(os.path.join(run_dir, f"metrics_fold_{fold}.png"), dpi=150)
     plt.close(fig)
-
-
-
-
-
-    
-
