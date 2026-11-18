@@ -22,6 +22,9 @@ def get_args():
 
     parser.add_argument("-seed", type=int, default=42)
 
+    # augmentation is on by default, -no_augment turns it off
+    parser.add_argument("-no_augment", dest="augment", action="store_false")
+
     args = parser.parse_args()
 
     return args

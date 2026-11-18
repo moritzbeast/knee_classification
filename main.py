@@ -31,7 +31,7 @@ for fold in range(5):
     mean, std = compute_mean_std(train_set)
     print(f"Fold {fold} | Mean {mean:.4f} | Std {std:.4f}")
 
-    train_dataset = knee_xray_dataset(train_set, mean, std, train_transform)
+    train_dataset = knee_xray_dataset(train_set, mean, std, train_transform if args.augment else None)
     val_dataset = knee_xray_dataset(val_set, mean, std)
 
     # 4. Create dataloaders
