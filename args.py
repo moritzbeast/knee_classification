@@ -20,6 +20,8 @@ def get_args():
 
     parser.add_argument("-wd", type=float, default=1e-6)
 
+    parser.add_argument("-seed", type=int, default=42)
+
     args = parser.parse_args()
 
     return args

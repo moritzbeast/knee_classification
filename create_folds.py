@@ -10,7 +10,7 @@ def load_image_data(dataset_path="data/Labeled", labels=("0", "1", "2", "3", "4"
     for label in labels:
         label_path = os.path.join(dataset_path, label)
 
-        for image in os.listdir(label_path):
+        for image in sorted(os.listdir(label_path)):
             image_path = os.path.join(label_path, image)
             image_data.append((image_path, label))
 
