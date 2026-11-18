@@ -14,7 +14,7 @@ def set_seed(seed):
 
 def make_run_dir(args):
     # folder name: timestamp + all training args, e.g.
-    # sessions/2026-11-18_14-30-05_backbone-resnet18_epochs-10_bs-32_lr-0.0001_wd-1e-06_seed-42
+    # sessions/2026-11-18_14-30-05_backbone-resnet18_epochs-10_bs-32_lr-0.0001_wd-1e-06_seed-42_augment-True
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     params = "_".join(f"{key}-{value}" for key, value in vars(args).items()
                       if key not in ("output_dir", "csv_dir"))

@@ -7,11 +7,16 @@ from model import MyModel
 from trainer import train_model
 from utils import set_seed, make_run_dir
 from torchvision.transforms import v2
+import torch
 
 # 1. We need the arguments
 args = get_args()
 run_dir = make_run_dir(args)
 print(f"Saving results to {run_dir}")
+
+# parallel image loading on the GPU server; 0 on the Mac, because macOS would
+# run this whole script again in every worker (no if __name__ == "__main__")
+num_workers = 8 if torch.cuda.is_available() else 0
 
 # augmentation, only for the training set
 train_transform = v2.Compose([
@@ -35,8 +40,8 @@ for fold in range(5):
     val_dataset = knee_xray_dataset(val_set, mean, std)
 
     # 4. Create dataloaders
-    train_loader = DataLoader(train_dataset, batch_size=args.bs, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=args.bs)
+    train_loader = DataLoader(train_dataset, batch_size=args.bs, shuffle=True, num_workers=num_workers)
+    val_loader = DataLoader(val_dataset, batch_size=args.bs, num_workers=num_workers)
 
     # 5. Initializing the model
     model = MyModel(backbone=args.backbone)

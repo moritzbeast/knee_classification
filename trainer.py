@@ -12,7 +12,12 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 
 args = get_args()
-device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+device = torch.device(
+    "cuda" if torch.cuda.is_available()
+    else "mps" if torch.backends.mps.is_available()
+    else "cpu"
+)
+print(f"Using device: {device}")
 
 METRICS = ["loss", "acc", "bal_acc", "f1"]
 
